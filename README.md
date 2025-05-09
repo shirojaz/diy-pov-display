@@ -114,8 +114,8 @@ Make sure to create a template on [Blynk Console](https://blynk.cloud/dashboard)
 
 ## Maintainers
 
-Group 3 - CpE 3202 (2024-2025)
-ESP32 POV Display Final Project
+- Group 3 - CpE 3202 (2024-2025)
+- ESP32 POV Display Final Project
 
 ---
 
