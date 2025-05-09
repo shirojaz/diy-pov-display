@@ -1,7 +1,7 @@
 // ========== Blynk Credentials ==========
-#define BLYNK_TEMPLATE_ID "TMPL6lmHoF70W"
-#define BLYNK_TEMPLATE_NAME "POV Fan Display"
-#define BLYNK_AUTH_TOKEN "ceQOsxT5W2r8kgMFg1uypjDRhix7jQ6t"
+#define BLYNK_TEMPLATE_ID "[TEMPLATE ID]"
+#define BLYNK_TEMPLATE_NAME "[TEMPLATE NAME]"
+#define BLYNK_AUTH_TOKEN "[AUTH TOKEN]"
 
 // ========== Libraries ==========
 #include <Adafruit_NeoPixel.h>
