@@ -1,41 +1,52 @@
-// Blynk configuration
+// ========== Blynk Credentials ==========
 #define BLYNK_TEMPLATE_ID "TMPL6lmHoF70W"
 #define BLYNK_TEMPLATE_NAME "POV Fan Display"
 #define BLYNK_AUTH_TOKEN "ceQOsxT5W2r8kgMFg1uypjDRhix7jQ6t"
 
+// ========== Libraries ==========
 #include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
 #include <BlynkSimpleEsp32.h>
-#include <TimeLib.h>       // For hour(), minute()
-#include <WidgetRTC.h>     // Blynk's RTC time support
+#include <TimeLib.h>
+#include <WidgetRTC.h>
 
-// ===== Hardware Pins and Settings =====
-#define LED_PIN 13
-#define NUM_LEDS 8
-#define HALL_SENSOR 14
+// ========== Hardware Configuration ==========
+#define LED_PIN       13
+#define NUM_LEDS      8
+#define HALL_SENSOR   14
 #define TOTAL_COLUMNS 16
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-// WiFi Credentials
+// ========== WiFi Credentials ==========
 const char* ssid = "realme GT Master Edition";
 const char* password = "password";
 
-// Timing & display rotation vars
-volatile unsigned long lastPulse = 0, currentPulse = 0;
-volatile float rotationTime = 0, interval = 0;
+// ========== Blynk Virtual Pins ==========
+#define VPIN_BRIGHTNESS V1
+#define VPIN_COLOR      V2
+#define VPIN_MODE       V3
+#define VPIN_CLOCK_MODE V4
+#define VPIN_WEATHER_DESC V5
+#define VPIN_WEATHER_TEMP V6
+#define VPIN_CUSTOM_TEXT V7
 
-// ===== State Variables =====
-char message[32] = "TIME: 00:00";  // Default message
-int displayMode = 0; // 0: time, 1: weather, 2: custom
-char weatherDesc[32] = "Sunny";
-char temperature[8] = "30C";
-char customText[32] = "HELLO!";
-uint32_t textColor = strip.Color(255, 255, 255); // default white
-int brightness = 100;
-
+// ========== Global State ==========
 WidgetRTC blynkRtc;
-bool isBlynkConnected = false;
+char message[30] = "TIME: 00:00";  // Current display text
+char weatherDesc[20] = "Sunny";
+char temperature[10] = "28C";
+char customText[30] = "HELLO";
+int mode = 0;  // 0 = Clock, 1 = Weather, 2 = Custom
+uint32_t textColor = Adafruit_NeoPixel::Color(255, 255, 255);
+uint8_t brightness = 50;
+
+volatile unsigned long lastPulse = 0, currentPulse = 0;
+volatile float rotationTime = 0;
+volatile bool newRotation = false;
+
+unsigned long prevColumnTime = 0;
+int columnIndex = 0;
 
 // ====== Basic Font: 5x7 for A–Z and 0–9 ======
 const uint8_t font[][5] = {
@@ -77,15 +88,18 @@ const uint8_t font[][5] = {
   {0x30, 0x49, 0x49, 0x4A, 0x3C}  // 9
 };
 
-// ===== Interrupt: Hall sensor pulse for rotation sync =====
-void hallSensorTrigger() {
+// ========== Interrupt Handler ==========
+void IRAM_ATTR hallSensorTrigger() {
   lastPulse = currentPulse;
   currentPulse = micros();
   rotationTime = currentPulse - lastPulse;
+  columnIndex = 0;
+  newRotation = true;
 }
 
-// ===== Setup: WiFi, Blynk, Interrupts, LEDs =====
+// ========== Setup ==========
 void setup() {
+  Serial.begin(115200);
   strip.begin();
   strip.setBrightness(brightness);
   strip.show();
@@ -93,106 +107,100 @@ void setup() {
   pinMode(HALL_SENSOR, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(HALL_SENSOR), hallSensorTrigger, FALLING);
 
-  Serial.begin(115200);
   WiFi.begin(ssid, password);
-
-  // Attempt Blynk connection (blocking)
   Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
   blynkRtc.begin();
 }
 
-// ===== Main Loop =====
+// ========== Main Loop ==========
 void loop() {
-  // Check Blynk connection once per loop
-  if (Blynk.connected()) {
-    isBlynkConnected = true;
-    Blynk.run();
-  } else {
-    isBlynkConnected = false;
-  }
+  Blynk.run();
 
   if (rotationTime > 0) {
-    interval = rotationTime / TOTAL_COLUMNS;
+    float interval = rotationTime / TOTAL_COLUMNS;
+    unsigned long currentTime = micros();
 
-    // Pick mode
-    switch (displayMode) {
-      case 0:  updateTime(); break;
-      case 1:  sprintf(message, "%s %s", weatherDesc, temperature); break;
-      case 2:  strncpy(message, customText, sizeof(message)); break;
-    }
+    if (currentTime - prevColumnTime >= interval) {
+      prevColumnTime = currentTime;
 
-    displayArcText(message);
-  }
-}
-
-// ====== Draw characters centered in the rotation ======
-void displayArcText(char *text) {
-  int textLength = strlen(text);
-  int totalTextWidth = textLength * 5;
-  int startOffset = (TOTAL_COLUMNS - totalTextWidth) / 2;
-
-  delayMicroseconds(interval * startOffset);  // Centering
-
-  for (int i = 0; i < textLength; i++) {
-    char c = text[i];
-    const uint8_t* charFont = nullptr;
-
-    if (c >= 'A' && c <= 'Z')      charFont = font[c - 'A'];
-    else if (c >= '0' && c <= '9') charFont = font[c - '0' + 26];
-    else                           continue;
-
-    for (int col = 0; col < 5; col++) {
-      for (int row = 0; row < 7; row++) {
-        int ledIndex = (row * NUM_LEDS / 7);
-        bool pixelOn = charFont[col] & (1 << row);
-        strip.setPixelColor(ledIndex, pixelOn ? textColor : 0);
+      switch (mode) {
+        case 0: updateTime(); break;
+        case 1: snprintf(message, sizeof(message), "%s %s", weatherDesc, temperature); break;
+        case 2: strncpy(message, customText, sizeof(message)); break;
       }
-      strip.show();
-      delayMicroseconds(interval);
+
+      displayColumn(message, columnIndex);
+      columnIndex++;
+      if (columnIndex >= TOTAL_COLUMNS) columnIndex = 0;
     }
   }
 }
 
-// ===== Time mode display message =====
-void updateTime() {
-  if (year() < 2020) return;  // Wait for sync
-  sprintf(message, "TIME: %02d:%02d", hour(), minute());
-  if (isBlynkConnected) Blynk.virtualWrite(V0, message); // Optional V0 display
+// ========== Display a Column ==========
+void displayColumn(const char* text, int colIndex) {
+  strip.clear();
+  int textLen = strlen(text);
+  int totalCols = textLen * 6 - 1;  // 5 cols + 1 spacing
+
+  int offset = colIndex - (TOTAL_COLUMNS - totalCols) / 2;  // Centering (commented out)
+  // int offset = colIndex;  // Uncentered for testing
+
+  for (int i = 0; i < textLen; i++) {
+    char c = text[i];
+    int fontIndex = -1;
+    if (c >= 'A' && c <= 'Z') fontIndex = c - 'A';
+    else if (c >= '0' && c <= '9') fontIndex = c - '0' + 26;
+
+    if (fontIndex >= 0) {
+      for (int col = 0; col < 5; col++) {
+        int displayCol = i * 6 + col;
+        if (displayCol == offset) {
+          for (int row = 0; row < 7; row++) {
+            if (font[fontIndex][col] & (1 << row)) {
+              int ledIndex = row * NUM_LEDS / 7;
+              strip.setPixelColor(ledIndex, textColor);
+            }
+          }
+        }
+      }
+    }
+  }
+  strip.show();
 }
 
-// ====== BLYNK HANDLERS ======
-// Brightness Slider (V1)
-BLYNK_WRITE(V1) {
+// ========== Update Time ==========
+void updateTime() {
+  if (year() > 2020) {
+    sprintf(message, "TIME: %02d:%02d", hour(), minute());
+    Blynk.virtualWrite(VPIN_CLOCK_MODE, message);
+  }
+}
+
+// ========== Blynk Handlers ==========
+BLYNK_WRITE(VPIN_BRIGHTNESS) {
   brightness = param.asInt();
   strip.setBrightness(brightness);
 }
 
-// Color Picker (V2)
-BLYNK_WRITE(V2) {
-  textColor = param.asInt(); // RGB 24-bit color from picker
+BLYNK_WRITE(VPIN_COLOR) {
+  int r = param[0].asInt();
+  int g = param[1].asInt();
+  int b = param[2].asInt();
+  textColor = strip.Color(r, g, b);
 }
 
-// Mode Selector (V3): 0 = time, 1 = weather, 2 = custom
-BLYNK_WRITE(V3) {
-  displayMode = param.asInt();
+BLYNK_WRITE(VPIN_MODE) {
+  mode = param.asInt();  // 0 = Clock, 1 = Weather, 2 = Custom
 }
 
-// Default mode button (V4)
-BLYNK_WRITE(V4) {
-  displayMode = 0;
+BLYNK_WRITE(VPIN_WEATHER_DESC) {
+  strncpy(weatherDesc, param.asStr(), sizeof(weatherDesc));
 }
 
-// Weather description (V5)
-BLYNK_WRITE(V5) {
-  strncpy(weatherDesc, param[0].c_str(), sizeof(weatherDesc));
+BLYNK_WRITE(VPIN_WEATHER_TEMP) {
+  strncpy(temperature, param.asStr(), sizeof(temperature));
 }
 
-// Temperature string (V6)
-BLYNK_WRITE(V6) {
-  strncpy(temperature, param[0].c_str(), sizeof(temperature));
-}
-
-// Custom text (V7)
-BLYNK_WRITE(V7) {
-  strncpy(customText, param[0].c_str(), sizeof(customText));
+BLYNK_WRITE(VPIN_CUSTOM_TEXT) {
+  strncpy(customText, param.asStr(), sizeof(customText));
 }
